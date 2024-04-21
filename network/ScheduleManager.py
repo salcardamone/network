@@ -18,22 +18,45 @@ from .Packet import DataPacket
 from .Schedule import Schedule, ScheduleState
 
 class ScheduleManager:
-    """
+    """ Communication schedule management.
     """
 
     @dataclass
     class ScheduleEvent:
+        """ Logging event, keeping track of when schedule events take place.
+        """
+
+        # Start time of the schedule event
         start : int
+        # Stop time of the schedule event
         stop : int
+        # Radio mode for the schedule event
         mode : RadioMode
 
     def __init__(
         self, env : simpy.Environment,
-        transmit_cb : Callable[[Schedule, DataPacket], None],
-        receive_cb : Callable[[Schedule], DataPacket],
+        transmit_cb : Callable[[int, DataPacket], None],
+        receive_cb : Callable[[int], Optional[DataPacket]],
         handle_packet_cb : Callable[[Optional[DataPacket]], None]
     ):
-        """
+        """ Class constructor.
+
+        Parameters
+        ----------
+            env :
+                The simpy environment.
+            transmit_cb :
+                Callback function which takes a data packet and the duration of
+                the scheduled transmit period. As designed, this should be the
+                radio's transmit function.
+            receive_cb :
+                Callback function which takes the duration of the scheduled receive
+                period and optionally returns a data packet if one was received
+                while in receive mode. As designed, this should be the radio's
+                receive function.
+            handle_packet_cb :
+                Callback function which takes the received packet and enacts some
+                protocol-specific action to handle the packet.
         """
         self._env = env
         self._logger = logging.getLogger("ScheduleManager")
@@ -48,14 +71,30 @@ class ScheduleManager:
         
         self._manager_proc = self._env.process(self.run())
         
-    def add(self, schedule : Schedule):
-        """
+    def add(self, schedule : Schedule) -> bool:
+        """ Add a schedule to the manager.
+
+        TODO: Should implement some function which looks for where the schedule can
+        be placed without colliding with other schedules.
+
+        Parameters
+        ----------
+            schedule :
+                The schedule to try and add.
+
+        Returns
+        -------
+            bool
+                True if the schedule was successfully added, else false.
         """
         was_awaiting_schedules = False
         if self._schedules == []:
             was_awaiting_schedules = True
 
         self._schedules.append(schedule)
+        # Need to interrupt the manager process in case the schedule we've added will
+        # trigger during any timeouts that the manager process is currently waiting
+        # on because the other schedules will trigger later
         self._manager_proc.interrupt()
         
         self._event_log += [
@@ -70,16 +109,26 @@ class ScheduleManager:
         self._logger.debug(f"Schedule was added at time {self._env.now}")
         self._logger.debug(f"{schedule}")
         self._logger.debug(f"{len(self._schedules)} schedule/s are now active")
-            
-    def _next_active_schedule(self):
-        """
+
+        return True
+        
+    def _next_active_schedule(self) -> Optional[Schedule]:
+        """ Query which schedule is going to trigger an event next.
+
+        Returns
+        -------
+            Schedule which triggers next if there is one, else None.
         """
         if self._schedules == []:
             return None
         return min(self._schedules, key=lambda x : x.next_time())
 
     def run(self):
-        """
+        """ Process which waits for the next schedule to trigger, then configures
+        the radio in the appropriate mode to enact the schedule.
+
+        Will invoke the various callbacks that the ScheduleManager has been
+        parameterised with for transmitting, receiving and handling packets.
         """
         while True:
             if self._schedules == []:
