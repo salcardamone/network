@@ -5,7 +5,7 @@ import logging
 from enum import Enum
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Iterable
 ###
 ### Third-party dependencies
 ###
@@ -115,6 +115,14 @@ class Radio:
         # The radio packet traversing the radio 
         packet : RadioPacket
 
+        @staticmethod
+        def get_events(
+            events : Iterable["PacketEvent"], status : "Radio.PacketEvent.Status"
+        ) -> Iterable["PacketEvent"]:
+            """
+            """
+            return [packet for packet in events if packet.status == status]
+        
         def __str__(self) -> str:
             """ Stringify the packet event.
 
@@ -195,13 +203,15 @@ class Radio:
         self._transmit_event.reactivate(tx_packet)
         self._logger.debug(f"Begins TX. Packet: {tx_packet}")
         yield self._env.timeout(duration)
+
+        self._mode = RadioMode.OFF
+        
         self._tx_packet_history.append(
             self.PacketEvent(
                 status=self.PacketEvent.Status.SUCCESS, time=self._env.now,
                 packet=tx_packet
             )
         )
-        self._mode = RadioMode.OFF
         self._logger.debug(f"Completes TX.")
 
     def notify_intent_to_deliver(self, packet : RadioPacket) -> bool:
@@ -296,7 +306,7 @@ class Radio:
             else:
                 # TODO: Need to create some unified interrupting data structure
                 # for both radio turning off and packet collision
-                if self._pending_rx != None and self._pending_rx.processed == False:
+                if self._pending_rx != None and self._pending_rx.is_alive == True:
                     self._pending_rx.interrupt("Radio stopped being in receive mode!")
                 else:
                     self._logger.debug("No packet was received.")

@@ -13,7 +13,7 @@ import simpy
 ### Project dependencies
 ###
 from .Node import Node
-from .Radio import RadioMode, RadioPacket
+from .Radio import RadioMode, RadioPacket, Radio
 
 class World:
     """ Environment in which nodes exist; includes features such as physical
@@ -105,31 +105,40 @@ class World:
                 # Work out which Nodes we need to route the packet to; need to check whether
                 # it's a broadcast packet or not, and remove the transmitting Node from the
                 # recipient list if so
-                rx_nodes = None
+                rx_nodes = []
                 if tx_packet.dest() == "All":
-                    rx_nodes = self._nodes.values().remove(self._nodes[tx_packet.src()])
+                    rx_nodes = self._nodes.copy()
+                    del rx_nodes[tx_packet.src()]
+                    rx_nodes = list(rx_nodes.values())
                 else:
                     rx_nodes = [self._nodes[tx_packet.dest()]]
 
+                names = [node._name for node in rx_nodes]
+                self._logger.debug(f"{names}")
                 # Deliver the packet to the destination Nodes so long as the destination
                 # node radios are capable of receiving the packet that's being routed
                 for rx_node in rx_nodes:
+                    self._logger.debug(f"Routing to {rx_node._name}: {tx_packet}")
                     if rx_node._radio.notify_intent_to_deliver(tx_packet):
                         pending_rx = rx_node._radio._pending_rx
                         # If the receiving Node isn't currently in the process of
                         # receiving an earlier packet, start receiving
-                        if pending_rx == None or pending_rx.processed == True:
+                        if pending_rx == None or pending_rx.is_alive == False:
                             rx_node._radio._pending_rx = self._env.process(
-                                self.pending_transmit(tx_packet)
+                                self.pending_transmit(rx_node._radio, tx_packet)
                             )
+                            self._logger.info("Here")
                         # Otherwise if the receiving Node is in the process of receiving
                         # an earlier packet, interrupt that receive process and ascertain
                         # whether this new packet interferes with the receiving of the
                         # earlier packet
                         else:
-                            pending_rx.interrupt(tx_packet)
+                            if (pending_rx is not None) or pending_rx.is_alive == True:
+                                pending_rx.interrupt(tx_packet)
+                            else:
+                                self._logger.warning("Unrecognised error when routing.")
 
-    def pending_transmit(self, packet : RadioPacket):
+    def pending_transmit(self, radio : Radio, packet : RadioPacket):
         """ Timeout for the duration of a radio packet.
 
         This should be spawned as a process belonging to the receiving node; if
@@ -170,4 +179,4 @@ class World:
         # no other packets have interfered with this one, so we can successfully
         # deliver
         if collision == False:
-            self._nodes[packet.dest()]._radio._receive_event.reactivate(packet)
+            radio._receive_event.reactivate(packet)
