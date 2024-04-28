@@ -1,6 +1,7 @@
 ###
 ### Python standard dependencies
 ###
+from enum import Enum
 import logging
 from typing import Iterable
 from dataclasses import dataclass
@@ -26,6 +27,14 @@ class World:
         packets on-air takes place
         """
 
+        class Status(Enum):
+            """
+            """
+            # Packets collided on-air
+            COLLISION = 1
+
+        # Status of the collision event
+        status : Status
         # The time at which the packets collide
         time : int
         # First packet being delivered
@@ -114,11 +123,9 @@ class World:
                     rx_nodes = [self._nodes[tx_packet.dest()]]
 
                 names = [node._name for node in rx_nodes]
-                self._logger.debug(f"{names}")
                 # Deliver the packet to the destination Nodes so long as the destination
                 # node radios are capable of receiving the packet that's being routed
                 for rx_node in rx_nodes:
-                    self._logger.debug(f"Routing to {rx_node._name}: {tx_packet}")
                     if rx_node._radio.notify_intent_to_deliver(tx_packet):
                         pending_rx = rx_node._radio._pending_rx
                         # If the receiving Node isn't currently in the process of
@@ -127,7 +134,6 @@ class World:
                             rx_node._radio._pending_rx = self._env.process(
                                 self.pending_transmit(rx_node._radio, tx_packet)
                             )
-                            self._logger.info("Here")
                         # Otherwise if the receiving Node is in the process of receiving
                         # an earlier packet, interrupt that receive process and ascertain
                         # whether this new packet interferes with the receiving of the
@@ -160,16 +166,24 @@ class World:
             # Timeout for the entire packet's duration
             try:
                 yield self._env.timeout(end_time - self._env.now)
+            # TODO : Triggering this interrupt should update the end time to whichever
+            #        of the packets has longer duration; can't just kill the process for
+            #        another packet to immediately come along and think there's nothing
+            #        else currently being received
             except simpy.Interrupt as interrupt:
                 interrupting_packet = interrupt.cause
-                self._logger.debug(
-                    f"{interrupting_packet.data_packet} collides with {packet.data_packet}"
-                )
-                self._collision_packet_history.append(
-                    self.CollisionEvent(
-                        time=self._env.now, packet_a=interrupting_packet, packet_b=packet
+                if type(interrupting_packet) is RadioPacket:
+                    self._logger.debug(
+                        f"{interrupting_packet.data_packet} collides with {packet.data_packet}"
                     )
-                )
+                    self._collision_packet_history.append(
+                        self.CollisionEvent(
+                            status=self.CollisionEvent.Status.COLLISION,
+                            time=self._env.now, packet_a=interrupting_packet, packet_b=packet
+                        )
+                    )
+                elif type(interrupting_packet) is str:
+                    self._logger.debug(f"Interrupted: {interrupting_packet}")
                 # Don't want to return yet because we want to mop up any other
                 # packets that might collide with this one; just flag that
                 # RX won't be successful

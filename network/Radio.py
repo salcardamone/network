@@ -10,6 +10,7 @@ from typing import Optional, Iterable
 ### Third-party dependencies
 ###
 import simpy
+import numpy as np
 ###
 ### Project dependencies
 ###
@@ -91,7 +92,7 @@ class Radio:
     """
 
     @dataclass
-    class PacketEvent:
+    class RadioEvent:
         """ Logging event, keeping track of the time at which a packet traverses
         the radio.
         """
@@ -99,12 +100,16 @@ class Radio:
         class Status(Enum):
             """
             """
+            # Packet was transmitted successfully
+            SUCCESS_TX = 1
             # Packet was delivered successfully
-            SUCCESS = 1
+            SUCCESS_RX = 2
+            #
+            NOTHING_RX = 3
             # Packet wasn't delivered because RSSI was too low
-            DROPPED_RSSI = 2
+            DROPPED_RSSI = 4
             # Packet wasn't delivered because radio wasn't in RX mode
-            DROPPED_MODE = 3
+            DROPPED_MODE = 5
             
         # Status of the packet that has traversed the radio
         status : Status
@@ -117,8 +122,8 @@ class Radio:
 
         @staticmethod
         def get_events(
-            events : Iterable["PacketEvent"], status : "Radio.PacketEvent.Status"
-        ) -> Iterable["PacketEvent"]:
+            events : Iterable["RadioEvent"], status : "Radio.RadioEvent.Status"
+        ) -> Iterable["RadioEvent"]:
             """
             """
             return [packet for packet in events if packet.status == status]
@@ -133,7 +138,7 @@ class Radio:
             """
             return f"Time: {self.time}, Status: {self.status}, RadioPacket: ({self.packet})"
 
-        def __eq__(self, other : "PacketEvent") -> bool:
+        def __eq__(self, other : "RadioEvent") -> bool:
             """ Equality overload for two packet events.
 
             Parameters
@@ -207,8 +212,8 @@ class Radio:
         self._mode = RadioMode.OFF
         
         self._tx_packet_history.append(
-            self.PacketEvent(
-                status=self.PacketEvent.Status.SUCCESS, time=self._env.now,
+            self.RadioEvent(
+                status=self.RadioEvent.Status.SUCCESS_TX, time=self._env.now,
                 packet=tx_packet
             )
         )
@@ -237,9 +242,9 @@ class Radio:
         # If the radio isn't in RX mode, then we drop the packet 
         if self._mode != RadioMode.RX:
             self._rx_packet_history.append(
-                self.PacketEvent(
-                    status=self.PacketEvent.Status.DROPPED_MODE,
-                    time=self._env.now, packet=packet
+                self.RadioEvent(
+                    status=self.RadioEvent.Status.DROPPED_MODE,
+                    time=self._env.now + packet.duration, packet=packet
                 )
             )
             self._logger.debug(self._rx_packet_history[-1])
@@ -248,9 +253,9 @@ class Radio:
         # Packet RSSI was too low to be received, so drop the packet
         if packet.rssi < self._threshold_rssi:
             self._rx_packet_history.append(
-                self.PacketEvent(
-                    status=self.PacketEvent.Status.DROPPED_RSSI,
-                    time=self._env.now, packet=packet
+                self.RadioEvent(
+                    status=self.RadioEvent.Status.DROPPED_RSSI,
+                    time=self._env.now + packet.duration, packet=packet
                 )
             )
             self._logger.debug(self._rx_packet_history[-1])
@@ -297,8 +302,8 @@ class Radio:
                 packet = receiving.value
                 self._logger.debug(f"Receives Packet: {packet}")
                 self._rx_packet_history.append(
-                    self.PacketEvent(
-                        status=self.PacketEvent.Status.SUCCESS,
+                    self.RadioEvent(
+                        status=self.RadioEvent.Status.SUCCESS_RX,
                         time=self._env.now, packet=packet
                     )
                 )
@@ -310,6 +315,19 @@ class Radio:
                     self._pending_rx.interrupt("Radio stopped being in receive mode!")
                 else:
                     self._logger.debug("No packet was received.")
+
+                # If we didn't get a packet during the listening period, log it
+                # as a blank packet to denote the fact that we didn't receive anything
+                if packet is None:
+                    self._rx_packet_history.append(
+                        self.RadioEvent(
+                            status=self.RadioEvent.Status.NOTHING_RX, time=self._env.now,
+                            packet=RadioPacket(
+                                data_packet=None, duration=self._env.now - start_time,
+                                rssi=None
+                            )
+                        )
+                    )
                 
         self._logger.debug("Completes RX.")
         self._mode = RadioMode.OFF
